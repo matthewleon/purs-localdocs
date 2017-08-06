@@ -2,6 +2,7 @@
 
 module Main where
 
+import Control.Monad (join)
 import Data.Bifunctor as Bifunctor
 import Data.Monoid ((<>))
 import qualified Data.SemVer as SemVer
@@ -29,18 +30,21 @@ main = do
   return ()
 
 getPscPackageVersion :: IO (Either Text SemVer.Version)
-getPscPackageVersion = do
-  cmdResult <- catchIOError (Right <$> runPscPackage) handleErr
-  return $ do
-    (_, stdOut, stdErr) <- cmdResult
-    flip Bifunctor.first (SemVer.fromText (Text.stripEnd stdOut)) $
-      \parseError -> Text.pack parseError <>
-        if Text.null stdErr
-        then ""
-        else "\npsc-package error: " <> stdErr
+getPscPackageVersion = join . fmap parseSemVer <$> runPscPackageCmd "sources"
   where
-    runPscPackage :: IO (ExitCode, Text, Text)
-    runPscPackage = readProcessWithExitCode "psc-package" ["--version"] ""
+    parseSemVer :: Text -> Either Text SemVer.Version
+    parseSemVer = Bifunctor.first Text.pack . SemVer.fromText
+
+getPscPackageSources :: IO (Either Text [Text])
+getPscPackageSources = fmap Text.lines <$> runPscPackageCmd "sources"
+
+runPscPackageCmd :: String -> IO (Either Text Text)
+runPscPackageCmd cmd =
+  fmap (\(_, out, _) -> Text.stripEnd out) <$>
+    catchIOError (Right <$> run) handleErr
+  where
+    run :: IO (ExitCode, Text, Text)
+    run = readProcessWithExitCode "psc-package" ["--" ++ cmd] ""
 
     handleErr :: IOError -> IO (Either Text (ExitCode, Text, Text))
-    handleErr err = return . Left $ "Error running psc-package: " `Text.append` Text.pack (show err)
+    handleErr err = return . Left $ "Error running psc-package: " <> Text.pack (show err)

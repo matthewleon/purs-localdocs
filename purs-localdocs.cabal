@@ -19,7 +19,6 @@ executable purs-localdocs
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   build-depends:       base
                      , errors
-                     , mtl
                      , text
                      , process-extras
                      , semver
