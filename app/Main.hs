@@ -70,7 +70,8 @@ runPscPackageCmd cmd =
   run = readProcessWithExitCode "psc-package" [cmd] ""
 
   handleErr :: IOError -> IO (Either Text (ExitCode, Text, Text))
-  handleErr err = return . Left $ "Error running psc-package: " <> Text.pack (show err)
+  handleErr err = return . Left $
+    "Error running psc-package: " <> Text.pack (show err)
 
 getModuleName :: FilePath -> IO (Either Text Text)
 getModuleName fp = withFile fp ReadMode $ \handle -> do
