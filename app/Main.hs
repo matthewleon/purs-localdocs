@@ -35,6 +35,7 @@ main = void . runExceptT $ do
   moduleNames <- liftIO $ rights <$> traverse getModuleName paths
   liftIO . TextIO.putStr $ Text.unlines moduleNames
   `catchError` (liftIO . TextIO.hPutStrLn stderr)
+  -- TODO: exit code
 
 checkPscPackageVersion :: ExceptT Text IO ()
 checkPscPackageVersion = do
@@ -74,13 +75,16 @@ runPscPackageCmd cmd =
     "Error running psc-package: " <> Text.pack (show err)
 
 getModuleName :: FilePath -> IO (Either Text Text)
-getModuleName fp = withFile fp ReadMode $ \handle -> do
-  -- TODO: handle errors from hGetContents
-  fileContent <- TextLIO.hGetContents handle
-  evaluate . force $ case extractModuleName fileContent of
-    Nothing   -> Left $ "Unable to read module name from " <> Text.pack fp
-    Just name -> Right name
+getModuleName fp = withFile fp ReadMode $ \h -> runExceptT $ do
+  fileContent <- ExceptT $ evaluate =<<
+    catchIOError (Right <$> TextLIO.hGetContents h) handleErr
+  case force $ extractModuleName fileContent of
+    Nothing   -> throwError $ "Unable to read module name from " <> Text.pack fp
+    Just name -> return name
   where
+  handleErr :: IOError -> IO (Either Text TextL.Text)
+  handleErr err = return . Left $ "Error reading content of " <> Text.pack fp
+                               <> ": " <> Text.pack (show err)
   extractModuleName :: TextL.Text -> Maybe Text
   extractModuleName =
     headMay . mapMaybe (moduleNameFromLine . TextL.toStrict) . TextL.lines
