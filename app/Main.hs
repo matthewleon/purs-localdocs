@@ -22,7 +22,7 @@ import Safe (headMay)
 import System.FilePath.Glob (glob)
 import System.IO (FilePath, IOMode(ReadMode), withFile, stderr)
 import System.IO.Error (catchIOError)
-import System.Exit (ExitCode)
+import System.Exit (ExitCode, exitFailure)
 import System.Process.Text (readProcessWithExitCode)
 import Prelude
 
@@ -34,8 +34,7 @@ main = void . runExceptT $ do
   paths <- ExceptT getPscPackageSourcePaths
   moduleNames <- liftIO $ rights <$> traverse getModuleName paths
   liftIO . TextIO.putStr $ Text.unlines moduleNames
-  `catchError` (liftIO . TextIO.hPutStrLn stderr)
-  -- TODO: exit code
+  `catchError` \err -> liftIO $ TextIO.hPutStrLn stderr err >> exitFailure
 
 checkPscPackageVersion :: ExceptT Text IO ()
 checkPscPackageVersion = do
