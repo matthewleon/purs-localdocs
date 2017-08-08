@@ -40,7 +40,6 @@ main = void . runExceptT $ do
   moduleNames <- liftIO $ getModuleNames paths
   ExceptT $ genDocs (Set.toList paths) (Set.toList moduleNames)
   return ()
-  --genDocs paths moduleNames
   `catchError` \err -> liftIO $ TextIO.hPutStrLn stderr err >> exitFailure
 
 checkPscPackageVersion :: ExceptT Text IO ()
