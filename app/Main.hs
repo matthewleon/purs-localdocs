@@ -2,12 +2,14 @@
 
 module Main where
 
+import Control.Arrow ((>>>))
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)
 import Control.Monad (void, join, unless)
 import Control.Monad.Except (ExceptT(ExceptT), runExceptT, catchError, throwError, liftIO)
 import Data.Bifunctor as Bifunctor
 import Data.Either (partitionEithers)
+import qualified Data.List as List
 import Data.Maybe (mapMaybe)
 import Data.Monoid ((<>))
 import Data.Set (Set)
@@ -25,6 +27,7 @@ import System.FilePath.Glob (glob)
 import System.IO (FilePath, IOMode(ReadMode), withFile, stderr)
 import System.IO.Error (catchIOError)
 import System.Exit (ExitCode, exitFailure)
+import System.Process (callProcess)
 import System.Process.Text (readProcessWithExitCode)
 import Prelude
 
@@ -35,6 +38,7 @@ main = void . runExceptT $ do
   checkPscPackageVersion
   paths <- ExceptT getPscPackageSourcePaths
   moduleNames <- liftIO $ getModuleNames paths
+  ExceptT $ genDocs (Set.toList paths) (Set.toList moduleNames)
   return ()
   --genDocs paths moduleNames
   `catchError` \err -> liftIO $ TextIO.hPutStrLn stderr err >> exitFailure
@@ -85,7 +89,6 @@ getModuleNames paths = do
   unless (null errors) (TextIO.hPutStr stderr . Text.unlines $ errors)
   return $ Set.fromList mNames
 
-
 getModuleName :: FilePath -> IO (Either Text Text)
 getModuleName fp = withFile fp ReadMode $ \h -> runExceptT $ do
   fileContent <- ExceptT $ evaluate =<<
@@ -103,4 +106,20 @@ getModuleName fp = withFile fp ReadMode $ \h -> runExceptT $ do
     where
     moduleNameFromLine :: Text -> Maybe Text
     moduleNameFromLine =
-      fmap (Text.takeWhile (`notElem` ['_', ' '])) . Text.stripPrefix "module "
+      Text.stripPrefix "module "
+      >>> fmap (Text.stripEnd . Text.takeWhile (`notElem` ['_', ' ']))
+
+genDocs :: [FilePath] -> [Text] -> IO (Either Text ())
+genDocs paths moduleNames = catchIOError run handleErr
+  where
+  run = Right <$> callProcess "purs" args
+    where
+    args = "docs" : paths ++ (docgen : List.intersperse docgen docargs)
+      where
+      docgen = "--docgen"
+      docargs = flip map moduleNames $ \mName ->
+        Text.unpack mName <> ":generated-docs/" <> Text.unpack mName <> ".md"
+
+  handleErr :: IOError -> IO (Either Text ())
+  handleErr err = return . Left $
+    "Error running purs: " <> Text.pack (show err)

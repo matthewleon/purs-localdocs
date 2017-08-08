@@ -20,6 +20,7 @@ executable purs-localdocs
   build-depends:       base
                      , errors
                      , text
+                     , process
                      , process-extras
                      , semver
                      , Glob
