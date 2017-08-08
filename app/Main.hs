@@ -7,9 +7,11 @@ import Control.Exception (evaluate)
 import Control.Monad (void, join, unless)
 import Control.Monad.Except (ExceptT(ExceptT), runExceptT, catchError, throwError, liftIO)
 import Data.Bifunctor as Bifunctor
-import Data.Either (rights)
+import Data.Either (partitionEithers)
 import Data.Maybe (mapMaybe)
 import Data.Monoid ((<>))
+import Data.Set (Set)
+import qualified Data.Set as Set
 import Data.Traversable (traverse)
 import qualified Data.SemVer as SemVer
 import qualified Data.Text   as Text
@@ -32,8 +34,9 @@ main :: IO ()
 main = void . runExceptT $ do
   checkPscPackageVersion
   paths <- ExceptT getPscPackageSourcePaths
-  moduleNames <- liftIO $ rights <$> traverse getModuleName paths
-  liftIO . TextIO.putStr $ Text.unlines moduleNames
+  moduleNames <- liftIO $ getModuleNames paths
+  return ()
+  --genDocs paths moduleNames
   `catchError` \err -> liftIO $ TextIO.hPutStrLn stderr err >> exitFailure
 
 checkPscPackageVersion :: ExceptT Text IO ()
@@ -45,8 +48,9 @@ checkPscPackageVersion = do
       <> SemVer.toText pscPackageMinVersion
       <> "\nYou are running version " <> SemVer.toText pscPackageVersion
 
-getPscPackageSourcePaths :: IO (Either Text [FilePath])
-getPscPackageSourcePaths = traverse globAll =<< getPscPackageSources
+getPscPackageSourcePaths :: IO (Either Text (Set FilePath))
+getPscPackageSourcePaths = fmap Set.fromList <$>
+    (traverse (globAll . Set.toList) =<< getPscPackageSources)
   where
   globAll :: [Text] -> IO [FilePath]
   globAll = fmap concat . traverse (glob . Text.unpack)
@@ -58,8 +62,9 @@ getPscPackageVersion = join . fmap parseSemVer <$> runPscPackageCmd "--version"
   parseSemVer t = flip Bifunctor.first (SemVer.fromText t) $ \err ->
     "Error parsing version from psc-package: " <> Text.pack err
 
-getPscPackageSources :: IO (Either Text [Text])
-getPscPackageSources = fmap Text.lines <$> runPscPackageCmd "sources"
+getPscPackageSources :: IO (Either Text (Set Text))
+getPscPackageSources =
+  fmap (Set.fromList . Text.lines) <$> runPscPackageCmd "sources"
 
 runPscPackageCmd :: String -> IO (Either Text Text)
 runPscPackageCmd cmd =
@@ -72,6 +77,14 @@ runPscPackageCmd cmd =
   handleErr :: IOError -> IO (Either Text (ExitCode, Text, Text))
   handleErr err = return . Left $
     "Error running psc-package: " <> Text.pack (show err)
+
+getModuleNames :: Set FilePath -> IO (Set Text)
+getModuleNames paths = do
+  (errors, mNames) <- partitionEithers <$>
+    traverse getModuleName (Set.toList paths)
+  unless (null errors) (TextIO.hPutStr stderr . Text.unlines $ errors)
+  return $ Set.fromList mNames
+
 
 getModuleName :: FilePath -> IO (Either Text Text)
 getModuleName fp = withFile fp ReadMode $ \h -> runExceptT $ do
