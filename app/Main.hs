@@ -98,7 +98,7 @@ genDocs paths moduleNames = procs "purs" args empty
     where
     docgen = "--docgen"
     docargs = flip map moduleNames $ \mName -> mName <> ":"
-      <> pathToText ("generated-docs" </> Path.fromText mName <.> ".md")
+      <> pathToText ("generated-docs" </> Path.fromText mName <.> "md")
 
 pathToText :: FilePath -> Text
 pathToText = either id id . Path.toText
