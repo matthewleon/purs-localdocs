@@ -5,6 +5,7 @@ module Main where
 import Control.Arrow ((>>>))
 import Control.Exception.Safe (Exception, throw, tryAny, catchAny, displayException)
 import qualified Control.Foldl as Fold
+import Data.Char (isSpace)
 import Data.Either (either, partitionEithers)
 import qualified Data.List as List
 import qualified Data.List.NonEmpty as NEList
@@ -19,6 +20,7 @@ import qualified Data.Text as Text
 import System.FilePath.Glob (glob)
 import qualified Filesystem.Path.CurrentOS as Path
 import Filesystem.Path.CurrentOS ((</>), (<.>))
+import Safe (headMay)
 import Turtle
 import Prelude hiding (FilePath)
 
@@ -83,10 +85,10 @@ getModuleName path = liftIO $
   >>= maybe (die errText) return
   where
   parseModuleName :: Line -> Maybe Text
-  parseModuleName = --TODO: Pattern?
-    lineToText
-    >>> Text.stripPrefix "module "
-    >>> fmap (Text.stripEnd . Text.takeWhile (`notElem` ['_', ' ']))
+  parseModuleName = lineToText >>> match pat >>> headMay
+    where
+    pat = "module "
+          *> prefix (plus $ satisfy (not . ((||) <$> isSpace <*> ('(' ==))))
 
   errText = "Couldn't parse module name from " <> pathToText path
 
