@@ -3,122 +3,105 @@
 module Main where
 
 import Control.Arrow ((>>>))
-import Control.DeepSeq (force)
-import Control.Exception (evaluate)
-import Control.Monad (void, join, unless)
-import Control.Monad.Except (ExceptT(ExceptT), runExceptT, catchError, throwError, liftIO)
-import Data.Bifunctor as Bifunctor
-import Data.Either (partitionEithers)
+import Control.Exception.Safe (Exception, throw, throwString, tryAny, catchAny, displayException)
+import qualified Control.Foldl as Fold
+import Data.Either (either, partitionEithers)
 import qualified Data.List as List
-import Data.Maybe (mapMaybe)
-import Data.Monoid ((<>))
+import qualified Data.List.NonEmpty as NEList
+import Data.Monoid (First(First), getFirst, (<>))
 import Data.Set (Set)
 import qualified Data.Set as Set
+import Data.Foldable (traverse_)
 import Data.Traversable (traverse)
 import qualified Data.SemVer as SemVer
-import qualified Data.Text   as Text
-import qualified Data.Text.Lazy   as TextL
-import qualified Data.Text.IO as TextIO
-import qualified Data.Text.Lazy.IO as TextLIO
 import Data.Text (Text)
-import GHC.IO.Handle (hGetContents)
-import Safe (headMay)
+import qualified Data.Text as Text
 import System.FilePath.Glob (glob)
-import System.IO (FilePath, IOMode(ReadMode), withFile, stderr)
-import System.IO.Error (catchIOError)
-import System.Exit (ExitCode, exitFailure)
-import System.Process (callProcess)
-import System.Process.Text (readProcessWithExitCode)
-import Prelude
+import qualified Filesystem.Path.CurrentOS as Path
+import Turtle
+import Prelude hiding (FilePath)
 
 pscPackageMinVersion = SemVer.version 0 2 0 [] []
 
 main :: IO ()
-main = void . runExceptT $ do
+main = do
   checkPscPackageVersion
-  paths <- ExceptT getPscPackageSourcePaths
-  moduleNames <- liftIO $ getModuleNames paths
-  ExceptT $ genDocs (Set.toList paths) (Set.toList moduleNames)
-  return ()
-  `catchError` \err -> liftIO $ TextIO.hPutStrLn stderr err >> exitFailure
+  paths <- getPscPackageSourcePaths
+  moduleNames <- getModuleNames paths
+  genDocs (Set.toList paths) (Set.toList moduleNames)
+  `catchAny` \e -> stderrException e >> exit (ExitFailure 1)
 
-checkPscPackageVersion :: ExceptT Text IO ()
+checkPscPackageVersion :: MonadIO m => m ()
 checkPscPackageVersion = do
-  pscPackageVersion <- ExceptT getPscPackageVersion
+  pscPackageVersion <- getPscPackageVersion
   unless (pscPackageVersion >= pscPackageMinVersion) $
-    throwError $
+    liftIO . throwString $
       "purs-localdocs requires a Minimum psc-package version of "
-      <> SemVer.toText pscPackageMinVersion
-      <> "\nYou are running version " <> SemVer.toText pscPackageVersion
+      <> SemVer.toString pscPackageMinVersion
+      <> "\nYou are running version " <> SemVer.toString pscPackageVersion
 
-getPscPackageSourcePaths :: IO (Either Text (Set FilePath))
-getPscPackageSourcePaths = fmap Set.fromList <$>
-    (traverse (globAll . Set.toList) =<< getPscPackageSources)
+getPscPackageVersion :: MonadIO m => m SemVer.Version
+getPscPackageVersion = liftIO $ parseSemVer =<< runPscPackageCmd "--version"
+  where
+  parseSemVer t = either rethrow return (SemVer.fromText t)
+    where
+    rethrow err = throwString $ "Error parsing version from psc-package: " <> err
+
+getPscPackageSourcePaths :: MonadIO m => m (Set FilePath)
+getPscPackageSourcePaths = liftIO $ Set.fromList <$>
+    (globAll . Set.toList =<< getPscPackageSources)
   where
   globAll :: [Text] -> IO [FilePath]
-  globAll = fmap concat . traverse (glob . Text.unpack)
+  globAll globs = fmap (Path.fromText . Text.pack) . concat
+    <$> traverse (glob . Text.unpack) globs
 
-getPscPackageVersion :: IO (Either Text SemVer.Version)
-getPscPackageVersion = join . fmap parseSemVer <$> runPscPackageCmd "--version"
+getPscPackageSources :: MonadIO m => m (Set Text)
+getPscPackageSources = Set.fromList . Text.lines <$> runPscPackageCmd "sources"
+
+runPscPackageCmd :: MonadIO m => Text -> m Text
+runPscPackageCmd cmd = liftIO $ Text.stripEnd <$> proc' "psc-package" [cmd]
   where
-  parseSemVer :: Text -> Either Text SemVer.Version
-  parseSemVer t = flip Bifunctor.first (SemVer.fromText t) $ \err ->
-    "Error parsing version from psc-package: " <> Text.pack err
+  proc' cmd args = do
+    (exitCode, out) <- procStrict cmd args empty
+    case exitCode of
+      ExitSuccess -> return out
+      _           -> throw (ProcFailed cmd args exitCode)
 
-getPscPackageSources :: IO (Either Text (Set Text))
-getPscPackageSources =
-  fmap (Set.fromList . Text.lines) <$> runPscPackageCmd "sources"
-
-runPscPackageCmd :: String -> IO (Either Text Text)
-runPscPackageCmd cmd =
-  fmap (\(_, out, _) -> Text.stripEnd out) <$>
-    catchIOError (Right <$> run) handleErr
-  where
-  run :: IO (ExitCode, Text, Text)
-  run = readProcessWithExitCode "psc-package" [cmd] ""
-
-  handleErr :: IOError -> IO (Either Text (ExitCode, Text, Text))
-  handleErr err = return . Left $
-    "Error running psc-package: " <> Text.pack (show err)
-
-getModuleNames :: Set FilePath -> IO (Set Text)
+getModuleNames :: MonadIO m => Set FilePath -> m (Set Text)
 getModuleNames paths = do
-  (errors, mNames) <- partitionEithers <$>
-    traverse getModuleName (Set.toList paths)
-  unless (null errors) (TextIO.hPutStr stderr . Text.unlines $ errors)
+  (errors, mNames) <- partitionEithers <$> liftIO getModuleNamesAndErrors
+  traverse_ stderrException errors
   return $ Set.fromList mNames
-
-getModuleName :: FilePath -> IO (Either Text Text)
-getModuleName fp = withFile fp ReadMode $ \h -> runExceptT $ do
-  fileContent <- ExceptT $ evaluate =<<
-    catchIOError (Right <$> TextLIO.hGetContents h) handleErr
-  case force $ extractModuleName fileContent of
-    Nothing   -> throwError $ "Unable to read module name from " <> Text.pack fp
-    Just name -> return name
   where
-  handleErr :: IOError -> IO (Either Text TextL.Text)
-  handleErr err = return . Left $ "Error reading content of " <> Text.pack fp
-                               <> ": " <> Text.pack (show err)
-  extractModuleName :: TextL.Text -> Maybe Text
-  extractModuleName =
-    headMay . mapMaybe (moduleNameFromLine . TextL.toStrict) . TextL.lines
-    where
-    moduleNameFromLine :: Text -> Maybe Text
-    moduleNameFromLine =
-      Text.stripPrefix "module "
-      >>> fmap (Text.stripEnd . Text.takeWhile (`notElem` ['_', ' ']))
+  getModuleNamesAndErrors = traverse (tryAny . getModuleName) (Set.toList paths)
 
-genDocs :: [FilePath] -> [Text] -> IO (Either Text ())
-genDocs paths moduleNames = catchIOError run handleErr
+getModuleName :: MonadIO m => FilePath -> m Text
+getModuleName path = liftIO $
+  fold (input path) (Fold.foldMap (First . parseModuleName) getFirst)
+  >>= maybe (throwString errStr) return -- TODO: die
   where
-  run = Right <$> callProcess "purs" args
-    where
-    args = "docs" : paths ++ (docgen : List.intersperse docgen docargs)
-      where
-      docgen = "--docgen"
-      docargs = flip map moduleNames $ \mName ->
-        Text.unpack mName <> ":generated-docs/" <> Text.unpack mName <> ".md"
+  parseModuleName :: Line -> Maybe Text
+  parseModuleName = --TODO: Pattern?
+    lineToText
+    >>> Text.stripPrefix "module "
+    >>> fmap (Text.stripEnd . Text.takeWhile (`notElem` ['_', ' ']))
 
-  handleErr :: IOError -> IO (Either Text ())
-  handleErr err = return . Left $
-    "Error running purs: " <> Text.pack (show err)
+  errStr = "Couldn't parse module name from " <> Text.unpack (pathToText path)
+
+genDocs :: [FilePath] -> [Text] -> IO ()
+genDocs paths moduleNames = procs "purs" args empty
+  where
+  args = "docs" : (pathToText <$> paths)
+         ++ docgen : List.intersperse docgen docargs
+    where
+    docgen = "--docgen"
+    -- TODO: use path construction tools
+    docargs = flip map moduleNames $ \mName ->
+      mName <> ":generated-docs/" <> mName <> ".md"
+
+pathToText :: FilePath -> Text
+pathToText = either id id . Path.toText
+
+stderrException :: (MonadIO m, Exception e) => e -> m ()
+stderrException = die . Text.pack . displayException
+
