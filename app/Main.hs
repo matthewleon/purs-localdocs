@@ -40,7 +40,7 @@ checkPscPackageVersion = do
   pscPackageVersion <- getPscPackageVersion
   unless (pscPackageVersion >= pscPackageMinVersion) $
     liftIO . die $
-      "purs-localdocs requires a Minimum psc-package version of "
+      "purs-localdocs requires a minimum psc-package version of "
       <> SemVer.toText pscPackageMinVersion
       <> "\nYou are running version " <> SemVer.toText pscPackageVersion
 
