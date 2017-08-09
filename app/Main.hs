@@ -3,7 +3,7 @@
 module Main where
 
 import Control.Arrow ((>>>))
-import Control.Exception.Safe (Exception, throw, throwString, tryAny, catchAny, displayException)
+import Control.Exception.Safe (Exception, throw, tryAny, catchAny, displayException)
 import qualified Control.Foldl as Fold
 import Data.Either (either, partitionEithers)
 import qualified Data.List as List
@@ -36,17 +36,18 @@ checkPscPackageVersion :: MonadIO m => m ()
 checkPscPackageVersion = do
   pscPackageVersion <- getPscPackageVersion
   unless (pscPackageVersion >= pscPackageMinVersion) $
-    liftIO . throwString $
+    liftIO . die $
       "purs-localdocs requires a Minimum psc-package version of "
-      <> SemVer.toString pscPackageMinVersion
-      <> "\nYou are running version " <> SemVer.toString pscPackageVersion
+      <> SemVer.toText pscPackageMinVersion
+      <> "\nYou are running version " <> SemVer.toText pscPackageVersion
 
 getPscPackageVersion :: MonadIO m => m SemVer.Version
 getPscPackageVersion = liftIO $ parseSemVer =<< runPscPackageCmd "--version"
   where
   parseSemVer t = either rethrow return (SemVer.fromText t)
     where
-    rethrow err = throwString $ "Error parsing version from psc-package: " <> err
+    rethrow err = die $
+      "Error parsing version from psc-package: " <> Text.pack err
 
 getPscPackageSourcePaths :: MonadIO m => m (Set FilePath)
 getPscPackageSourcePaths = liftIO $ Set.fromList <$>
@@ -79,7 +80,7 @@ getModuleNames paths = do
 getModuleName :: MonadIO m => FilePath -> m Text
 getModuleName path = liftIO $
   fold (input path) (Fold.foldMap (First . parseModuleName) getFirst)
-  >>= maybe (throwString errStr) return -- TODO: die
+  >>= maybe (die errText) return
   where
   parseModuleName :: Line -> Maybe Text
   parseModuleName = --TODO: Pattern?
@@ -87,7 +88,7 @@ getModuleName path = liftIO $
     >>> Text.stripPrefix "module "
     >>> fmap (Text.stripEnd . Text.takeWhile (`notElem` ['_', ' ']))
 
-  errStr = "Couldn't parse module name from " <> Text.unpack (pathToText path)
+  errText = "Couldn't parse module name from " <> pathToText path
 
 genDocs :: [FilePath] -> [Text] -> IO ()
 genDocs paths moduleNames = procs "purs" args empty
