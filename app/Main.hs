@@ -18,6 +18,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import System.FilePath.Glob (glob)
 import qualified Filesystem.Path.CurrentOS as Path
+import Filesystem.Path.CurrentOS ((</>), (<.>))
 import Turtle
 import Prelude hiding (FilePath)
 
@@ -95,9 +96,8 @@ genDocs paths moduleNames = procs "purs" args empty
          ++ docgen : List.intersperse docgen docargs
     where
     docgen = "--docgen"
-    -- TODO: use path construction tools
-    docargs = flip map moduleNames $ \mName ->
-      mName <> ":generated-docs/" <> mName <> ".md"
+    docargs = flip map moduleNames $ \mName -> mName <> ":"
+      <> pathToText ("generated-docs" </> Path.fromText mName <.> ".md")
 
 pathToText :: FilePath -> Text
 pathToText = either id id . Path.toText
