@@ -104,5 +104,5 @@ pathToText :: FilePath -> Text
 pathToText = either id id . Path.toText
 
 stderrException :: (MonadIO m, Exception e) => e -> m ()
-stderrException = die . Text.pack . displayException
-
+stderrException = stderr . select . textToLines' . Text.pack . displayException
+  where textToLines' = NEList.toList . textToLines
